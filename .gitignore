@@ -1,0 +1,39 @@
+# ── Secrets / credentials (NEVER commit) ───────────────────────────
+credentials/
+*.env
+.env
+.env.*
+!.env.example
+# Service-account / GCP key files anywhere in the tree
+*-service-account*.json
+**/*serviceaccount*.json
+purity-control-tower-*.json
+*.pem
+*.key
+
+# ── Node ───────────────────────────────────────────────────────────
+node_modules/
+dist/
+build/
+coverage/
+*.log
+npm-debug.log*
+.npm/
+.pnpm-store/
+
+# ── Build / tooling caches ─────────────────────────────────────────
+.vite/
+.turbo/
+*.tsbuildinfo
+.cache/
+
+# ── Editor / OS ────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# ── Local data dumps from discovery (contain real sampled rows) ────
+docs/EXISTING_SCHEMA.md
+docs/SAMPLE_DOCS.md
+scripts/discover/out/

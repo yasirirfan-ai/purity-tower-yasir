@@ -1,0 +1,15 @@
+{
+  "name": "@pct/discover",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only introspection of the existing BigQuery datasets and Firestore collections.",
+  "scripts": {
+    "start": "node discover.mjs"
+  },
+  "dependencies": {
+    "@google-cloud/bigquery": "^7.9.1",
+    "@google-cloud/firestore": "^7.10.0",
+    "dotenv": "^16.4.5"
+  }
+}

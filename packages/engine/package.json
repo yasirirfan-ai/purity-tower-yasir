@@ -1,0 +1,25 @@
+{
+  "name": "@pct/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure, I/O-free domain model + engine (inventory, match-rate, procurement, finance) ported from the Inventory Sync framework. The typed contract real data maps onto.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}
