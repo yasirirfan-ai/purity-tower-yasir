@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "buildCommand": "cd ../web && ../../node_modules/.bin/vite build",
+  "buildCommand": "/vercel/path0/node_modules/.bin/vite build --root /vercel/path0/packages/web",
   "outputDirectory": "packages/web/dist",
   "installCommand": "npm install --include=dev",
   "framework": null,
