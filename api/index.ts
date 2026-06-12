@@ -16,7 +16,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 // ── Credentials bootstrap ──────────────────────────────────────────────────
 // Vercel can't ship a JSON file, so the service-account key is stored as an
 // env var and written to /tmp once per cold-start.
-if (process.env.GCP_CREDENTIALS_JSON && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+if (process.env.GCP_CREDENTIALS_JSON) {
   const tmpPath = '/tmp/gcp-credentials.json';
   writeFileSync(tmpPath, process.env.GCP_CREDENTIALS_JSON);
   process.env.GOOGLE_APPLICATION_CREDENTIALS = tmpPath;
