@@ -2,7 +2,7 @@
   "version": 2,
   "buildCommand": "/vercel/path0/node_modules/.bin/vite build --root /vercel/path0/packages/web",
   "outputDirectory": "packages/web/dist",
-  "installCommand": "npm install --include=dev",
+  "installCommand": "cd /vercel/path0 && npm install --include=dev",
   "framework": null,
   "functions": {
     "api/index.ts": {
