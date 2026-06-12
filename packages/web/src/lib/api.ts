@@ -2,8 +2,13 @@ import { useEffect, useState } from 'react';
 
 export type Dict = Record<string, unknown>;
 
+// In production the frontend is on Vercel and the API is on Railway (different origins).
+// Set VITE_API_BASE_URL=https://your-api.railway.app on Vercel; leave unset in local dev
+// so the Vite proxy handles /api/* → localhost:8080.
+const API_BASE = ((import.meta.env['VITE_API_BASE_URL'] as string | undefined) ?? '').replace(/\/$/, '');
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await fetch(`${API_BASE}${path}`);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} — ${path}`);
   return (await res.json()) as T;
 }
