@@ -1,7 +1,7 @@
 {
   "version": 2,
   "buildCommand": "cd /vercel/path0 && node_modules/.bin/vite build packages/web --outDir packages/web/dist",
-  "outputDirectory": "packages/web/dist",
+  "outputDirectory": "../web/dist",
   "installCommand": "cd /vercel/path0 && npm install --include=dev",
   "framework": null,
   "functions": {
