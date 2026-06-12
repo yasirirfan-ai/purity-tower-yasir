@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "buildCommand": "npm run build --workspace=@pct/web",
+  "buildCommand": "node_modules/.bin/vite build --root packages/web",
   "outputDirectory": "packages/web/dist",
   "installCommand": "npm install --include=dev",
   "framework": null,
