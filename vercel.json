@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "buildCommand": "npm install && npm run build --workspace=@pct/web",
+  "buildCommand": "npm run build --workspace=@pct/web",
   "outputDirectory": "packages/web/dist",
   "installCommand": "npm install --include=dev",
   "framework": null,
