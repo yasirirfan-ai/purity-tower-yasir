@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "buildCommand": "cd packages/web && ../../node_modules/.bin/vite build",
+  "buildCommand": "npm run build --workspace=@pct/web",
   "outputDirectory": "packages/web/dist",
-  "installCommand": "npm install --include=dev",
+  "installCommand": "npm install --include=dev && npm install --prefix packages/web --include=dev",
   "framework": null,
   "functions": {
     "api/index.ts": {
