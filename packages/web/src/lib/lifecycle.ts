@@ -37,6 +37,7 @@ export interface LifecycleOrder {
  * The two material streams are scheduled to arrive on the same day ("arrive together").
  */
 export function buildLifecycle(order: LifecycleOrder, plan: LifecyclePlan): { rows: GanttRow[]; markers: GanttMarker[] } {
+  if (!plan?.packaging || !plan?.ingredients) return { rows: [], markers: [] };
   const rows: GanttRow[] = [
     {
       id: 'so', label: '① Sales order', sublabel: `ordered ${fmtDate(parseISO(order.order_date))}`,
