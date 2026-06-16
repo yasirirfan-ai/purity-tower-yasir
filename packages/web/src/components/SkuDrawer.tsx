@@ -200,6 +200,17 @@ function LifecycleSection({ salesOrders, projected }: { salesOrders: SalesOrderW
 
   const order = list[Math.min(sel, list.length - 1)]!;
   const plan = order.plan;
+
+  if (!plan?.packaging || !plan?.ingredients) {
+    return (
+      <Section title="Product lifecycle">
+        <div className="muted" style={{ fontSize: 13 }}>
+          No procurement timeline available for this SKU (plan data is incomplete).
+        </div>
+      </Section>
+    );
+  }
+
   const { rows, markers } = buildLifecycle(order, plan);
 
   return (
