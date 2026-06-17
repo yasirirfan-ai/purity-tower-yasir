@@ -44,17 +44,32 @@ interface OrdersData {
   rawMaterials: RawMaterial[];
 }
 
-interface VendorGroup {
-  vendor: string; imported: boolean; country: string;
-  lines: RawMaterial[]; totalUnits: number; earliestEta: string | null;
+interface SkuGroup {
+  key: string;
+  orders: SalesOrder[];
+  urgent: SalesOrder;
+  productName: string;
+  totalUnits: number;
 }
 
-const relLabel = (d: string | null) => {
+interface VendorGroup {
+  vendor: string; imported: boolean; country: string;
+  lines: RawMaterial[]; totalUnits: number; earliestEta: string | null; earliestOrderBy: string | null;
+  maxLeadDays: number | null;
+}
+
+const relLabel = (d: string | null, short = false) => {
   if (!d) return '—';
   const diff = Math.round((new Date(d).getTime() - Date.now()) / 86400000);
-  if (diff < 0) return `${-diff}d overdue`;
+  if (diff < 0) return short ? `${-diff}d overdue` : `${-diff}d overdue`;
   if (diff === 0) return 'today';
   return `in ${diff}d`;
+};
+
+const daysDiff = (a: string | null, b: string | null) => {
+  const am = parseISO(a), bm = parseISO(b);
+  if (am == null || bm == null) return null;
+  return Math.abs(Math.round((am - bm) / 86400000));
 };
 
 export function WhatToOrder() {
@@ -62,29 +77,53 @@ export function WhatToOrder() {
   const { data: ordersData } = useFetch<OrdersData>('/api/orders');
   const openSku = useOpenSku();
   const [search, setSearch] = useState('');
-  const [selId, setSelId] = useState<string | null>(null);
+  const [selKey, setSelKey] = useState<string | null>(null);
+  const [queuePage, setQueuePage] = useState(0);
+  const PAGE_SIZE = 25;
 
+  // All orders sorted by urgency
   const orders = useMemo(() => {
     let r = data?.orders ?? [];
     const q = search.trim().toLowerCase();
     if (q) r = r.filter((o) => `${o.order_id} ${o.sku} ${o.product_name}`.toLowerCase().includes(q));
-    return [...r].sort((a, b) => {
-      const ao = a.plan.orderNow ?? '9999', bo = b.plan.orderNow ?? '9999';
-      return ao.localeCompare(bo);
-    });
+    return [...r].sort((a, b) => (a.plan.orderNow ?? '9999').localeCompare(b.plan.orderNow ?? '9999'));
   }, [data, search]);
 
-  const selected = useMemo(
-    () => orders.find((o) => o.order_id === selId) ?? orders.find((o) => o.plan.targetArrival) ?? orders[0] ?? null,
-    [orders, selId],
+  // Deduplicate by SKU — one tab per product, pick most urgent order per group
+  const skuGroups = useMemo<SkuGroup[]>(() => {
+    const map = new Map<string, SalesOrder[]>();
+    for (const o of orders) {
+      const key = o.sku ?? o.order_id;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(o);
+    }
+    return [...map.values()]
+      .map((group) => {
+        const sorted = [...group].sort((a, b) => (a.plan.orderNow ?? '9999').localeCompare(b.plan.orderNow ?? '9999'));
+        const urgent = sorted[0]!;
+        return {
+          key: urgent.sku ?? urgent.order_id,
+          orders: sorted,
+          urgent,
+          productName: String(urgent.product_name ?? urgent.sku ?? urgent.order_id).replace(/\n/g, ' '),
+          totalUnits: group.reduce((s, o) => s + (o.ordered_quantity ?? 0), 0),
+        };
+      })
+      .sort((a, b) => (a.urgent.plan.orderNow ?? '9999').localeCompare(b.urgent.plan.orderNow ?? '9999'));
+  }, [orders]);
+
+  const selectedGroup = useMemo(
+    () => skuGroups.find((g) => g.key === selKey) ?? skuGroups[0] ?? null,
+    [skuGroups, selKey],
   );
+  const selected = selectedGroup?.urgent ?? null;
 
   const vendors = useMemo<VendorGroup[]>(() => {
     const map = new Map<string, VendorGroup>();
     for (const m of ordersData?.rawMaterials ?? []) {
       let v = map.get(m.vendor);
       if (!v) {
-        v = { vendor: m.vendor, imported: m.logistics.imported, country: m.logistics.country, lines: [], totalUnits: 0, earliestEta: null };
+        v = { vendor: m.vendor, imported: m.logistics.imported, country: m.logistics.country, lines: [], totalUnits: 0, earliestEta: null, earliestOrderBy: null, maxLeadDays: null };
         map.set(m.vendor, v);
       }
       v.lines.push(m);
@@ -96,12 +135,11 @@ export function WhatToOrder() {
   }, [ordersData]);
 
   const queue = useMemo(() => {
-    return [...(ordersData?.rawMaterials ?? [])]
-      .sort((a, b) => {
-        const da = a.eta_date ?? a.expected_arrival_date ?? '9999';
-        const db = b.eta_date ?? b.expected_arrival_date ?? '9999';
-        return da.localeCompare(db);
-      });
+    return [...(ordersData?.rawMaterials ?? [])].sort((a, b) => {
+      const da = a.eta_date ?? a.expected_arrival_date ?? '9999';
+      const db = b.eta_date ?? b.expected_arrival_date ?? '9999';
+      return da.localeCompare(db);
+    });
   }, [ordersData]);
 
   const po = useFetch<{ orders: PoTimeline[] }>('/api/po-timeline');
@@ -118,10 +156,10 @@ export function WhatToOrder() {
       {/* KPI grid */}
       <div className="kpi-grid">
         {[
-          { label: 'POs to place within 7 days', value: num(k.orderNowCount), sub: `across ${num(k.openOrders)} open sales orders`, edge: 'var(--crit)', icon: Ic.alert },
-          { label: 'Open raw-material units', value: num(ok?.openUnits ?? 0), sub: `${num(ok?.openLineCount ?? 0)} lines · ${num(ok?.openPoCount ?? 0)} POs`, edge: 'var(--cap)', icon: Ic.scale },
+          { label: 'POs to place within 7 days', value: num(k.orderNowCount), sub: `across ${num(skuGroups.length)} finished goods`, edge: 'var(--crit)', icon: Ic.alert },
+          { label: 'Open order value', value: `${num(ok?.openPoCount ?? 0)} POs`, sub: `${num(ok?.openLineCount ?? 0)} lines · ${num(ok?.openUnits ?? 0)} open units`, edge: 'var(--cap)', icon: Ic.scale },
           { label: 'Earliest stock-out', value: fmtDate(parseISO(k.earliestNeedBy)), sub: relLabel(k.earliestNeedBy), edge: 'var(--warn)', icon: Ic.clock },
-          { label: 'Vendors to engage', value: num(vendors.length), sub: `${num(queue.length)} component lines`, edge: 'var(--ink)', icon: Ic.channels },
+          { label: 'Vendors to engage', value: num(vendors.length), sub: `${num(queue.length)} line items`, edge: 'var(--ink)', icon: Ic.channels },
         ].map((kpi, i) => (
           <div className="kpi" key={i}>
             <div className="accent-edge" style={{ background: kpi.edge }} />
@@ -137,7 +175,7 @@ export function WhatToOrder() {
         <div className="card-pad" style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
           {Ic.recon({ style: { width: 18, height: 18, color: 'var(--accent)', marginTop: 1, flex: 'none' } })}
           <p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.55, maxWidth: 780 }}>
-            Orders are scheduled <strong>backward from each SKU's stock-out date</strong>. The ideal is <strong>every material landing just in time for the build</strong> — nothing arrives early to sit idle and tie up cash. Both streams — packaging (CN, ~{data.meta.packagingLeadDays}d lead) and ingredients (US, ~{data.meta.ingredientLeadDays}d lead) — are scheduled to <strong>arrive on the same day</strong>, then filled ({data.meta.fillDays}d) and shipped.
+            Orders are scheduled <strong>backward from each SKU's stock-out date</strong>. The ideal is <strong>every material landing just in time for the build</strong> — nothing arrives early to sit idle and tie up cash. Use the toggle on the timeline to compare a synced plan against ordering everything today. With <strong>net terms</strong> layered on, the goal is to <strong>sell the finished units before the supplier invoice comes due</strong>.
           </p>
         </div>
       </div>
@@ -148,39 +186,46 @@ export function WhatToOrder() {
         <div className="line" />
       </div>
 
-      {/* SKU tag selector */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-        <div className="search" style={{ width: 240 }}>
+      {/* SKU tabs — deduplicated by product */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16, alignItems: 'center' }}>
+        <div className="search" style={{ width: 220 }}>
           <span className="muted">⌕</span>
           <input placeholder="Filter orders…" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
-        {orders.slice(0, 40).map((o) => {
-          const sel = selected?.order_id === o.order_id;
-          const overdue = o.plan.overdue;
-          const name = String(o.product_name ?? o.sku ?? '').replace(/\n/g, ' ');
+        {skuGroups.slice(0, 30).map((g) => {
+          const sel = selectedGroup?.key === g.key;
+          const label = relLabel(g.urgent.plan.orderNow);
+          const overdue = g.urgent.plan.overdue;
+          const name = g.productName.length > 32 ? g.productName.slice(0, 31) + '…' : g.productName;
           return (
             <button
-              key={o.order_id}
+              key={g.key}
               className={`tag${sel ? ' on' : ''}`}
-              onClick={() => setSelId(o.order_id)}
-              style={{ display: 'flex', alignItems: 'center', gap: 5 }}
+              onClick={() => setSelKey(g.key)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
             >
-              <span style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {name.length > 34 ? name.slice(0, 33) + '…' : name}
-              </span>
-              <span className="mono" style={{ fontSize: 10, opacity: 0.7 }}>
-                {overdue ? '⚠ overdue' : o.plan.orderNow ? relLabel(o.plan.orderNow) : '—'}
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+              <span style={{ fontSize: 10, color: overdue ? 'var(--crit)' : 'var(--muted)', fontWeight: 600, flex: 'none' }}>
+                {label}
               </span>
             </button>
           );
         })}
-        {orders.length > 40 && (
-          <span style={{ fontSize: 12, color: 'var(--muted)', alignSelf: 'center' }}>+{orders.length - 40} more</span>
+        {skuGroups.length > 30 && (
+          <span style={{ fontSize: 12, color: 'var(--muted)', alignSelf: 'center' }}>+{skuGroups.length - 30} more</span>
         )}
       </div>
 
       {/* Selected order Gantt */}
-      {selected && <OrderPlan order={selected} openSku={openSku} poTimeline={poMap.get(selected.order_id) ?? null} poLoading={po.loading} />}
+      {selected && selectedGroup && (
+        <OrderPlan
+          group={selectedGroup}
+          order={selected}
+          openSku={openSku}
+          poTimeline={poMap.get(selected.order_id) ?? null}
+          poLoading={po.loading}
+        />
+      )}
 
       {/* Vendor PO summary */}
       <div className="section-title" style={{ marginTop: 28 }}>
@@ -195,7 +240,7 @@ export function WhatToOrder() {
       {/* Procurement queue */}
       <div className="section-title" style={{ marginTop: 28 }}>
         <h2>Procurement queue</h2>
-        <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>Every line, sorted by ETA date</span>
+        <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>Every line, sorted by order-by date</span>
         <div className="line" />
       </div>
       <div className="card" style={{ overflow: 'hidden' }}>
@@ -203,33 +248,36 @@ export function WhatToOrder() {
           <table className="data">
             <thead>
               <tr>
-                <th>ETA</th>
-                <th>Component / SKU</th>
+                <th>Order by</th>
+                <th>Component</th>
                 <th>Vendor</th>
-                <th>Type</th>
-                <th className="num">Open qty</th>
+                <th>For</th>
+                <th className="num">Order qty</th>
                 <th>Status</th>
               </tr>
             </thead>
             <tbody>
-              {queue.slice(0, 200).map((m, i) => {
+              {queue.slice(queuePage * PAGE_SIZE, (queuePage + 1) * PAGE_SIZE).map((m, i) => {
+                const orderBy = m.order_date ?? m.eta_date ?? m.expected_arrival_date;
                 const eta = m.eta_date ?? m.expected_arrival_date;
-                const overdue = eta ? new Date(eta) < new Date() : false;
+                const overdue = orderBy ? new Date(orderBy) < new Date() : false;
                 const isImported = m.logistics.imported;
                 const desc = String(m.description ?? m.sku ?? '').replace(/^\[[^\]]+\]\s*/, '').replace(/\n/g, ' ');
-                const statusLabel = overdue ? ['crit', 'Overdue'] : m.status === 'purchase' ? ['neutral', 'On order'] : ['good', titleCase(String(m.status ?? ''))];
+                const daysUntil = orderBy ? Math.round((new Date(orderBy).getTime() - Date.now()) / 86400000) : null;
+                const statusTone = overdue ? 'crit' : daysUntil != null && daysUntil <= 0 ? 'warn' : daysUntil != null && daysUntil <= 7 ? 'cap' : 'neutral';
+                const statusLabel = overdue ? 'Overdue' : daysUntil === 0 ? 'Order now' : daysUntil != null && daysUntil <= 7 ? 'Soon' : titleCase(String(m.status ?? 'Scheduled'));
                 return (
                   <tr key={i} className="row">
                     <td>
-                      <div style={{ fontWeight: 600 }}>{fmtDate(parseISO(eta))}</div>
-                      <div style={{ fontSize: 11, color: overdue ? 'var(--crit)' : 'var(--muted)' }}>{relLabel(eta)}</div>
+                      <div style={{ fontWeight: 600 }}>{fmtDate(parseISO(orderBy))}</div>
+                      <div style={{ fontSize: 11, color: overdue ? 'var(--crit)' : 'var(--muted)' }}>{relLabel(orderBy)}</div>
                     </td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span className="dotmark" style={{ background: isImported ? PKG_C : ING_C }} />
+                        <span className="dotmark" style={{ background: isImported ? PKG_C : ING_C, flex: 'none' }} />
                         <span>
-                          <span style={{ fontWeight: 500 }}>{desc.length > 40 ? desc.slice(0, 39) + '…' : desc}</span>
-                          <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--faint)' }}>{m.sku}</span>
+                          <span style={{ fontWeight: 500 }}>{desc.length > 38 ? desc.slice(0, 37) + '…' : desc}</span>
+                          {eta && <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--faint)' }}>ETA {fmtDate(parseISO(eta))}</span>}
                         </span>
                       </div>
                     </td>
@@ -240,20 +288,63 @@ export function WhatToOrder() {
                             {m.logistics.country === 'China' ? 'CN' : m.logistics.country.slice(0, 2).toUpperCase()}
                           </span>
                         )}
-                        <span style={{ color: 'var(--muted)', fontSize: 12.5 }}>{m.vendor}</span>
+                        <span style={{ fontSize: 12.5 }}>{m.vendor}</span>
                       </span>
                     </td>
                     <td>
-                      <span className={`pill ${isImported ? 'cap' : 'good'}`}>{isImported ? 'imported' : 'domestic'}</span>
+                      <span style={{ fontSize: 12, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', maxWidth: 180 }}>
+                        {String(m.sku ?? '—')}
+                      </span>
                     </td>
-                    <td className="num">{num(m.open_quantity)}</td>
-                    <td><Pill band={statusLabel[0] as string}>{String(statusLabel[1])}</Pill></td>
+                    <td className="num">{num(m.ordered_quantity ?? m.open_quantity)}</td>
+                    <td><Pill band={statusTone}>{statusLabel}</Pill></td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
+        {/* Pagination */}
+        {queue.length > PAGE_SIZE && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--hairline)' }}>
+            <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+              {queuePage * PAGE_SIZE + 1}–{Math.min((queuePage + 1) * PAGE_SIZE, queue.length)} of {num(queue.length)} lines
+            </span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                className="btn"
+                disabled={queuePage === 0}
+                onClick={() => setQueuePage((p) => p - 1)}
+                style={{ opacity: queuePage === 0 ? 0.4 : 1 }}
+              >
+                ← Prev
+              </button>
+              {Array.from({ length: Math.min(5, Math.ceil(queue.length / PAGE_SIZE)) }, (_, i) => {
+                const totalPages = Math.ceil(queue.length / PAGE_SIZE);
+                const mid = Math.min(Math.max(queuePage, 2), totalPages - 3);
+                const page = totalPages <= 5 ? i : mid - 2 + i;
+                return page >= 0 && page < totalPages ? (
+                  <button
+                    key={page}
+                    className="btn"
+                    onClick={() => setQueuePage(page)}
+                    style={{ minWidth: 32, background: page === queuePage ? 'var(--ink)' : undefined, color: page === queuePage ? '#fff' : undefined, borderColor: page === queuePage ? 'var(--ink)' : undefined }}
+                  >
+                    {page + 1}
+                  </button>
+                ) : null;
+              })}
+              <button
+                className="btn"
+                disabled={queuePage >= Math.ceil(queue.length / PAGE_SIZE) - 1}
+                onClick={() => setQueuePage((p) => p + 1)}
+                style={{ opacity: queuePage >= Math.ceil(queue.length / PAGE_SIZE) - 1 ? 0.4 : 1 }}
+              >
+                Next →
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       <p style={{ fontSize: 11.5, color: 'var(--faint)', marginTop: 12 }}>
         Carrier assignments and net terms are modeled — awaiting the vendor master. Lifecycle: packaging {data.meta.packagingLeadDays}d (CN ocean) · compound + fill {data.meta.ingredientLeadDays + data.meta.fillDays}d · inbound freight 9d · receive &amp; putaway 3d.
@@ -263,35 +354,38 @@ export function WhatToOrder() {
 }
 
 function VendorCard({ v }: { v: VendorGroup }) {
+  const overdue = v.earliestEta ? new Date(v.earliestEta) < new Date() : false;
   return (
-    <div className="card" style={{ padding: 16 }}>
+    <div className="card" style={{ padding: 18 }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.vendor}</div>
-          <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>{v.lines.length} line{v.lines.length !== 1 ? 's' : ''} · {v.imported ? 'Imported' : 'Domestic'}</div>
+          <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>{v.lines.length} line{v.lines.length !== 1 ? 's' : ''}</div>
         </div>
         <span className={`origin-badge ${v.imported ? 'cn' : 'us'}`}>{v.imported ? 'CN' : 'US'}</span>
       </div>
-      <div style={{ display: 'flex', gap: 18, margin: '13px 0 11px' }}>
+      <div style={{ display: 'flex', gap: 20, margin: '13px 0 11px', alignItems: 'flex-end' }}>
         <div>
-          <div className="mono" style={{ fontSize: 18, fontWeight: 700 }}>{num(v.totalUnits)}</div>
+          <div className="mono" style={{ fontSize: 20, fontWeight: 700 }}>{num(v.totalUnits)}</div>
           <div style={{ fontSize: 10.5, color: 'var(--muted)' }}>open units</div>
         </div>
         <div>
-          <div className="mono" style={{ fontSize: 18, fontWeight: 700, color: v.earliestEta && new Date(v.earliestEta) < new Date() ? 'var(--crit)' : 'var(--ink)' }}>
+          <div className="mono" style={{ fontSize: 20, fontWeight: 700, color: overdue ? 'var(--crit)' : 'var(--ink)' }}>
             {fmtDate(parseISO(v.earliestEta))}
           </div>
-          <div style={{ fontSize: 10.5, color: 'var(--muted)' }}>earliest ETA · {relLabel(v.earliestEta)}</div>
+          <div style={{ fontSize: 10.5, color: overdue ? 'var(--crit)' : 'var(--muted)' }}>
+            earliest ETA · {relLabel(v.earliestEta)}
+          </div>
         </div>
       </div>
-      <div style={{ borderTop: '1px solid var(--hairline)', paddingTop: 9, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ borderTop: '1px solid var(--hairline)', paddingTop: 9, display: 'flex', flexDirection: 'column', gap: 5 }}>
         {v.lines.slice(0, 5).map((l, i) => {
           const desc = String(l.description ?? l.sku ?? '').replace(/^\[[^\]]+\]\s*/, '').replace(/\n/g, ' ');
           return (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5 }}>
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
               <span className="dotmark" style={{ background: l.logistics.imported ? PKG_C : ING_C, flex: 'none' }} />
-              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--muted)' }}>{desc}</span>
-              <span className="mono" style={{ color: 'var(--faint)', flex: 'none', whiteSpace: 'nowrap' }}>{num(l.open_quantity)}</span>
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{desc}</span>
+              <span className="mono" style={{ color: 'var(--faint)', flex: 'none' }}>{num(l.open_quantity)}</span>
             </div>
           );
         })}
@@ -301,25 +395,43 @@ function VendorCard({ v }: { v: VendorGroup }) {
   );
 }
 
-function OrderPlan({ order, openSku, poTimeline, poLoading }: { order: SalesOrder; openSku: (s: string) => void; poTimeline: PoTimeline | null; poLoading: boolean }) {
+function OrderPlan({ group, order, openSku, poTimeline, poLoading }: {
+  group: SkuGroup; order: SalesOrder; openSku: (s: string) => void;
+  poTimeline: PoTimeline | null; poLoading: boolean;
+}) {
   const p = order.plan;
   const noNeedBy = !p.targetArrival;
   const { rows, markers } = buildLifecycle(order, p);
+
+  // Sync metrics
+  const spreadDays = daysDiff(p.packaging.arrival, p.ingredients.arrival) ?? 0;
+  const pkgMs = parseISO(p.packaging.arrival), ingMs = parseISO(p.ingredients.arrival);
+  const laterMs = pkgMs != null && ingMs != null ? Math.max(pkgMs, ingMs) : null;
+  const targetMs = parseISO(p.targetArrival);
+  const idleDays = laterMs != null && targetMs != null ? Math.max(0, Math.round((targetMs - laterMs) / 86400000)) : 0;
 
   return (
     <>
       <div className="card card-pad">
         <div className="row-between" style={{ alignItems: 'flex-start' }}>
           <div style={{ minWidth: 0 }}>
-            <div className="mono" style={{ fontSize: 12, color: 'var(--muted)' }}>
-              {order.order_id} ·{' '}
-              <button className="linklike" onClick={() => order.sku && openSku(order.sku)}>{order.sku}</button>
+            <h2 style={{ margin: '0 0 4px', fontSize: 20 }}>{group.productName}</h2>
+            <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+              Target build {num(group.totalUnits)} units · {group.orders.length} PO{group.orders.length !== 1 ? 's' : ''}
+              {group.orders.length > 1 && (
+                <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--faint)' }}>
+                  ({group.orders.map((o) => o.order_id).join(', ')})
+                </span>
+              )}
             </div>
-            <h2 style={{ margin: '4px 0 0', fontSize: 18 }}>{String(order.product_name ?? order.sku).replace(/\n/g, ' ')}</h2>
           </div>
-          <div style={{ textAlign: 'right', flex: 'none' }}>
-            <div className="bignum">{num(order.ordered_quantity)}<span className="faint" style={{ fontSize: 12 }}> units</span></div>
-            {p.overdue ? <Pill band="critical">order now</Pill> : <Pill band="good">on schedule</Pill>}
+          <div style={{ display: 'flex', gap: 8, flex: 'none' }}>
+            <button className="btn" style={{ background: 'var(--ink)', color: '#fff', borderColor: 'var(--ink)' }}>
+              Synced (JIT)
+            </button>
+            <button className="btn" onClick={() => order.sku && openSku(order.sku)}>
+              Order all today
+            </button>
           </div>
         </div>
 
@@ -329,12 +441,31 @@ function OrderPlan({ order, openSku, poTimeline, poLoading }: { order: SalesOrde
           </div>
         ) : (
           <>
-            {/* Sync metrics row */}
+            {/* Sync metrics — design style */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 1, background: 'var(--hairline)', border: '1px solid var(--hairline)', borderRadius: 9, overflow: 'hidden', marginTop: 16 }}>
-              <SyncMetric label="Order now by" value={fmtDate(parseISO(p.orderNow))} sub={relLabel(p.orderNow)} tone={p.overdue ? 'var(--crit)' : undefined} />
-              <SyncMetric label="Arrive together" value={fmtDate(parseISO(p.targetArrival))} sub="both streams" />
-              <SyncMetric label="Fill & ready" value={`${p.fillDays} days`} sub="fill + release window" />
-              <SyncMetric label="Need-by" value={fmtDate(parseISO(p.needBy))} sub="stock-out date" />
+              <SyncMetric
+                label="Sellable at 3PL"
+                value={fmtDate(parseISO(p.needBy))}
+                sub={relLabel(p.needBy)}
+                tone={p.overdue ? 'var(--crit)' : undefined}
+              />
+              <SyncMetric
+                label="Arrival spread"
+                value={`${spreadDays}d`}
+                sub={spreadDays === 0 ? 'tight — lands JIT' : `${spreadDays}d gap between streams`}
+                tone={spreadDays > 7 ? 'var(--warn)' : undefined}
+              />
+              <SyncMetric
+                label="Idle material-days"
+                value={String(idleDays)}
+                sub={idleDays === 0 ? 'nothing waiting — ideal' : `${idleDays}d sitting before fill`}
+                tone={idleDays > 0 ? 'var(--warn)' : undefined}
+              />
+              <SyncMetric
+                label="Fill & ready"
+                value={`${p.fillDays}d`}
+                sub={`${fmtDate(parseISO(p.targetArrival))} → ${fmtDate(parseISO(p.needBy))}`}
+              />
             </div>
             <div style={{ marginTop: 18 }}>
               <Gantt rows={rows} markers={markers} />
@@ -344,10 +475,12 @@ function OrderPlan({ order, openSku, poTimeline, poLoading }: { order: SalesOrde
       </div>
 
       {/* Two procurement streams */}
-      <div className="grid-2" style={{ marginTop: 14 }}>
-        <StreamCard title="② Packaging" color={PKG_C} badge="CN" s={p.packaging} openSku={openSku} />
-        <StreamCard title="③ Ingredients / compound" color={ING_C} badge="US" s={p.ingredients} openSku={openSku} formula={order.formula} />
-      </div>
+      {!noNeedBy && (
+        <div className="grid-2" style={{ marginTop: 14 }}>
+          <StreamCard title="② Packaging" color={PKG_C} badge="CN" s={p.packaging} openSku={openSku} />
+          <StreamCard title="③ Ingredients / compound" color={ING_C} badge="US" s={p.ingredients} openSku={openSku} formula={order.formula} />
+        </div>
+      )}
 
       {!noNeedBy && (
         <div className="card card-pad" style={{ marginTop: 14 }}>
@@ -370,10 +503,10 @@ function OrderPlan({ order, openSku, poTimeline, poLoading }: { order: SalesOrde
 
 function SyncMetric({ label, value, sub, tone }: { label: string; value: string; sub: string; tone?: string }) {
   return (
-    <div style={{ background: 'var(--surface)', padding: '12px 16px' }}>
-      <div style={{ fontSize: 10.5, color: 'var(--muted)', letterSpacing: '.03em', textTransform: 'uppercase' }}>{label}</div>
-      <div className="mono" style={{ fontSize: 18, fontWeight: 700, marginTop: 4, color: tone ?? 'var(--ink)' }}>{value}</div>
-      <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 2 }}>{sub}</div>
+    <div style={{ background: 'var(--surface)', padding: '14px 16px' }}>
+      <div style={{ fontSize: 10, color: 'var(--muted)', letterSpacing: '.06em', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
+      <div className="mono" style={{ fontSize: 22, fontWeight: 700, marginTop: 6, color: tone ?? 'var(--ink)', letterSpacing: '-.02em' }}>{value}</div>
+      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>{sub}</div>
     </div>
   );
 }

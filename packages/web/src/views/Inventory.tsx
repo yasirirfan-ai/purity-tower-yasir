@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useFetch, type SkuSummary } from '../lib/api';
 import { num, money } from '../lib/format';
 import { Loading, ErrorState } from '../components/ui';
@@ -66,11 +66,19 @@ const Arrow = ({ dir }: { dir: 1 | -1 | 0 }) =>
   : dir === -1 ? <span style={{ color: 'var(--accent)', fontSize: 9, marginLeft: 4 }}>▼</span>
   : <span style={{ color: 'var(--accent)', fontSize: 9, marginLeft: 4 }}>▲</span>;
 
-export function Inventory() {
+interface ReviewSummary { sku: string; avg?: number; count?: number; critical?: number; status?: string }
+
+export function Inventory({ initialBand = 'all' }: { initialBand?: string }) {
   const { data, loading, error } = useFetch<SkuList>('/api/skus?limit=5000');
+  const { data: reviewsRaw } = useFetch<ReviewSummary[]>('/api/reviews');
+  const reviewMap = useMemo(() => new Map((reviewsRaw ?? []).map((r) => [r.sku, r])), [reviewsRaw]);
   const openSku = useOpenSku();
   const [search, setSearch] = useState('');
-  const [band, setBand] = useState('all');
+  const [band, setBand] = useState(initialBand);
+
+  // Sync when navigating from Overview flags
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setBand(initialBand); }, [initialBand]);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'total_revenue', dir: -1 });
 
   const rows = useMemo(() => {
@@ -146,8 +154,9 @@ export function Inventory() {
               {rows.slice(0, 200).map((s) => {
                 const rb = String(s.risk_band ?? '').toLowerCase();
                 const tone = bandTone[rb] ?? 'neutral';
-                const stars = (s as Record<string, unknown>)['stars_avg'] as number | null | undefined;
-                const flaggedReviews = (s as Record<string, unknown>)['flagged_reviews'] as number | null | undefined;
+                const rev = reviewMap.get(String(s.sku ?? s.id));
+                const stars = rev?.avg ?? null;
+                const flaggedReviews = rev?.critical ?? null;
                 const expiry = (s as Record<string, unknown>)['expiry_date'] as string | null | undefined;
                 return (
                   <tr className="row" key={s.id} onClick={() => openSku(String(s.sku ?? s.id))}>

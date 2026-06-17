@@ -1,9 +1,11 @@
-import { type ReactNode } from 'react';
-import { useFetch, type Summary, type Dict } from '../lib/api';
+import { type ReactNode, useState } from 'react';
+import { useFetch, type Summary, type Dict, type SkuSummary } from '../lib/api';
 import { Ic } from '../lib/icons';
 import { num, money } from '../lib/format';
 import { Loading, ErrorState } from '../components/ui';
 import { useOpenSku, useGoView } from '../App';
+
+interface SkuList { count: number; total: number; skus: SkuSummary[]; }
 
 const ICO = { style: { width: 14, height: 14, color: 'var(--faint)' } };
 const CHEV = { style: { width: 14, height: 14, color: 'var(--faint)', flex: 'none' } };
@@ -22,8 +24,10 @@ export function Overview() {
   const { data, loading, error } = useFetch<Summary>('/api/summary');
   const { data: fin } = useFetch<FinSummary>('/api/finance/summary');
   const { data: readinessList } = useFetch<ReadinessSku[]>('/api/readiness');
+  const { data: skuList } = useFetch<SkuList>('/api/skus?limit=5000');
   const openSku = useOpenSku();
   const goView = useGoView();
+  const [kpiPanel, setKpiPanel] = useState<string | null>(null);
 
   if (loading) return <Loading />;
   if (error) return <ErrorState error={error} />;
@@ -58,24 +62,28 @@ export function Overview() {
       value: num(data.finished_goods_on_hand), unit: 'units',
       sub: `${num(data.sku_count)} SKUs across the 3PL pool`,
       edge: 'var(--ink)', icon: Ic.box,
+      onClick: () => setKpiPanel('tai'),
     },
     {
       key: 'sell', label: '60-day sell-through',
       value: num(data.units_30d_total ?? data.recent_units_sold), unit: 'units',
       sub: `${money(data.total_revenue ?? data.recent_revenue ?? 0)} net revenue`,
       edge: 'var(--good)', icon: Ic.trend,
+      onClick: () => setKpiPanel('sell'),
     },
     {
       key: 'flags', label: 'Critical supply flags',
       value: num(critCount), unit: '',
       sub: `${num(exc.stockout)} selling with zero stock`,
       edge: 'var(--crit)', icon: Ic.alert,
+      onClick: () => setKpiPanel('flags'),
     },
     {
       key: 'capital', label: 'Inventory at COGS',
       value: usdK(fgValue), unit: '',
       sub: arValue != null ? `AR ${usdK(arValue)} · AP ${usdK(apValue)}` : `${num(readiness.ready)} ready · ${num(readiness.blocked)} blocked`,
       edge: 'var(--cap)', icon: Ic.scale,
+      onClick: () => setKpiPanel('capital'),
     },
   ];
 
@@ -84,7 +92,7 @@ export function Overview() {
       {/* KPI grid */}
       <div className="kpi-grid">
         {kpis.map((k) => (
-          <div className="kpi kpi-btn" key={k.key}>
+          <div className="kpi kpi-btn" key={k.key} onClick={k.onClick} style={{ cursor: 'pointer' }}>
             <div className="accent-edge" style={{ background: k.edge }} />
             <div className="label">{k.icon(ICO)}{k.label}</div>
             <div className="value">
@@ -98,6 +106,18 @@ export function Overview() {
           </div>
         ))}
       </div>
+
+      {kpiPanel && (
+        <KpiPanel
+          panelId={kpiPanel}
+          skus={skuList?.skus ?? []}
+          totalSkus={data.sku_count ?? skuList?.total ?? 0}
+          totalUnits={data.finished_goods_on_hand}
+          fgValue={fgValue}
+          onClose={() => setKpiPanel(null)}
+          onViewInventory={(band) => { setKpiPanel(null); goView('inventory', band ? { band } : undefined); }}
+        />
+      )}
 
       {/* Match-rate hero */}
       <div className="section-title">
@@ -144,32 +164,38 @@ export function Overview() {
             {(exc.stockout ?? 0) > 0 && (
               <FlagRow tone="crit" icon={Ic.alert}
                 title={`${num(exc.stockout)} SKUs selling with zero stock`}
-                desc="Live demand, nothing in the warehouse — lost revenue today." />
+                desc="Live demand, nothing in the warehouse — lost revenue today."
+                onClick={() => goView('inventory', { band: 'stockout' })} />
             )}
             {(exc.critical ?? 0) > 0 && (
               <FlagRow tone="crit" icon={Ic.trend}
                 title={`${num(exc.critical)} SKUs under 30 days of cover`}
-                desc="Will stock out within the replenishment lead time." />
+                desc="Will stock out within the replenishment lead time."
+                onClick={() => goView('inventory', { band: 'crit' })} />
             )}
             {(exc.expiring ?? 0) > 0 && (
               <FlagRow tone="warn" icon={Ic.flask}
                 title={`${num(exc.expiring)} lots expiring within 6 months`}
-                desc="At-risk inventory that should be sold or written down." />
+                desc="At-risk inventory that should be sold or written down."
+                onClick={() => goView('inventory', { band: 'exp' })} />
             )}
             {(exc.warning ?? 0) > 0 && (
               <FlagRow tone="warn" icon={Ic.flask}
                 title={`${num(exc.warning)} lots flagged — expiry or quality risk`}
-                desc="At-risk inventory that should be sold or written down." />
+                desc="At-risk inventory that should be sold or written down."
+                onClick={() => goView('inventory', { band: 'exp' })} />
             )}
             {(exc.overstock ?? 0) > 0 && (
               <FlagRow tone="cap" icon={Ic.scale}
                 title={`${num(exc.overstock)} overstocked SKUs${fgValue ? ` — ${usdK(fgValue * 0.18)} tied up` : ''}`}
-                desc="More than a year of cover. Capital that could fund packaging." />
+                desc="More than a year of cover. Capital that could fund packaging."
+                onClick={() => goView('inventory', { band: 'over' })} />
             )}
             {(exc.low_confidence ?? 0) > 0 && (
               <FlagRow tone="neutral" icon={Ic.recon}
                 title={`${num(exc.low_confidence)} SKUs with low-confidence data`}
-                desc="Forecast or velocity data is sparse — treat projections with caution." />
+                desc="Forecast or velocity data is sparse — treat projections with caution."
+                onClick={() => goView('inventory', { band: 'all' })} />
             )}
             {critCount === 0 && (exc.expiring ?? 0) === 0 && (exc.overstock ?? 0) === 0 && (exc.warning ?? 0) === 0 && (
               <div style={{ padding: 24, textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>No active flags.</div>
@@ -252,11 +278,11 @@ function MiniMatch({ b, onClick }: { b: ReadinessSku; onClick: () => void }) {
   );
 }
 
-function FlagRow({ tone, icon, title, desc }: { tone: string; icon: (p?: object) => ReactNode; title: string; desc: string }) {
+function FlagRow({ tone, icon, title, desc, onClick }: { tone: string; icon: (p?: object) => ReactNode; title: string; desc: string; onClick?: () => void }) {
   const bg = ({ crit: 'var(--crit-tint)', warn: 'var(--warn-tint)', cap: 'var(--cap-tint)', neutral: 'var(--surface-2)' } as Record<string, string>)[tone] ?? 'var(--surface-2)';
   const fg = ({ crit: 'var(--crit)', warn: 'var(--warn)', cap: 'var(--cap)', neutral: 'var(--muted)' } as Record<string, string>)[tone] ?? 'var(--muted)';
   return (
-    <div className="flag-item">
+    <div className="flag-item" onClick={onClick} style={{ cursor: onClick ? 'pointer' : undefined }}>
       <div className="flag-ic" style={{ background: bg, color: fg }}>{icon({})}</div>
       <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 600, fontSize: 13.5 }}>{title}</div>
@@ -264,5 +290,128 @@ function FlagRow({ tone, icon, title, desc }: { tone: string; icon: (p?: object)
       </div>
       {Ic.arrowR(CHEV)}
     </div>
+  );
+}
+
+interface KpiPanelProps {
+  panelId: string;
+  skus: SkuSummary[];
+  totalSkus: number;
+  totalUnits?: number | null;
+  fgValue?: number | null;
+  onClose: () => void;
+  onViewInventory: (band?: string) => void;
+}
+
+function KpiPanel({ panelId, skus, totalSkus, totalUnits, fgValue, onClose, onViewInventory }: KpiPanelProps) {
+  const cfg: Record<string, {
+    title: string;
+    subtitle: string;
+    desc: string;
+    band?: string;
+    sorted: SkuSummary[];
+    renderRight: (s: SkuSummary) => string;
+    renderSub: (s: SkuSummary) => string;
+  }> = {
+    tai: {
+      title: 'Total Available Inventory',
+      subtitle: `${num(totalUnits)} units`,
+      desc: `${num(totalSkus)} SKUs in the combined 3PL pool. Largest holdings first.`,
+      sorted: [...skus].sort((a, b) => (b.finished_goods_on_hand ?? 0) - (a.finished_goods_on_hand ?? 0)),
+      renderRight: (s) => `${num(s.finished_goods_on_hand)} u`,
+      renderSub: (s) => `${String(s.sku ?? s.id)} · ${s.units_60d != null ? `${num(s.units_60d)} sold/60d` : 'no recent sales'}`,
+    },
+    sell: {
+      title: '60-day sell-through',
+      subtitle: `${num(skus.reduce((acc, s) => acc + (s.units_60d ?? 0), 0))} units sold`,
+      desc: 'Top SKUs by 60-day revenue. Click a row to open SKU detail.',
+      sorted: [...skus].filter((s) => (s.units_60d ?? 0) > 0).sort((a, b) => (b.total_revenue ?? 0) - (a.total_revenue ?? 0)),
+      renderRight: (s) => money(s.total_revenue),
+      renderSub: (s) => `${String(s.sku ?? s.id)} · ${num(s.units_60d)} units`,
+    },
+    flags: {
+      title: 'Critical supply flags',
+      subtitle: `${num(skus.filter((s) => ['stockout', 'critical', 'crit'].includes(String(s.risk_band ?? '').toLowerCase())).length)} at-risk SKUs`,
+      desc: 'Stockouts and sub-30d cover — lost or imminent lost revenue.',
+      band: 'stockout',
+      sorted: [...skus].filter((s) => ['stockout', 'critical', 'crit'].includes(String(s.risk_band ?? '').toLowerCase()))
+        .sort((a, b) => {
+          const order = { stockout: 0, critical: 1, crit: 1 } as Record<string, number>;
+          return (order[String(a.risk_band ?? '').toLowerCase()] ?? 2) - (order[String(b.risk_band ?? '').toLowerCase()] ?? 2);
+        }),
+      renderRight: (s) => {
+        const rb = String(s.risk_band ?? '').toLowerCase();
+        return rb === 'stockout' ? 'Stockout' : '<30d cover';
+      },
+      renderSub: (s) => `${String(s.sku ?? s.id)} · ${s.days_of_cover_estimate != null ? `${num(s.days_of_cover_estimate)}d cover` : 'no cover data'}`,
+    },
+    capital: {
+      title: 'Inventory at COGS',
+      subtitle: fgValue != null ? `$${(fgValue / 1e6).toFixed(2)}M at cost` : '—',
+      desc: 'SKUs with highest on-hand inventory value. Largest holdings first.',
+      sorted: [...skus].sort((a, b) => (b.finished_goods_on_hand ?? 0) - (a.finished_goods_on_hand ?? 0)),
+      renderRight: (s) => `${num(s.finished_goods_on_hand)} u`,
+      renderSub: (s) => `${String(s.sku ?? s.id)} · ${money(s.total_revenue)} rev`,
+    },
+  };
+
+  const c = cfg[panelId];
+  if (!c) return null;
+
+  return (
+    <>
+      <div className="scrim" onClick={onClose} />
+      <aside className="drawer" role="dialog" aria-label={c.title}>
+        <div className="drawer-head">
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+            <div>
+              <div className="eyebrow" style={{ marginBottom: 4 }}>ITEMIZED</div>
+              <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-.02em', lineHeight: 1.2 }}>{c.title}</div>
+              <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-.03em', marginTop: 6 }}>{c.subtitle}</div>
+            </div>
+            <button className="btn" onClick={onClose}>Close ✕</button>
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 10, lineHeight: 1.5 }}>{c.desc}</div>
+        </div>
+
+        <div className="drawer-body" style={{ padding: 0, flex: 1, overflowY: 'auto' }}>
+          {c.sorted.slice(0, 100).map((s) => (
+            <div
+              key={s.id}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                padding: '12px 24px', borderBottom: '1px solid var(--hairline)',
+                cursor: 'default',
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {String(s.product_name ?? s.sku ?? s.id).replace(/\n/g, ' ')}
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 3 }}>{c.renderSub(s)}</div>
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 600, flex: 'none', color: panelId === 'flags' ? 'var(--crit)' : 'var(--ink)' }}>
+                {c.renderRight(s)}
+              </div>
+            </div>
+          ))}
+          {c.sorted.length === 0 && (
+            <div style={{ padding: '40px 24px', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
+              No SKUs in this category.
+            </div>
+          )}
+
+          <div style={{ padding: '16px 24px', borderTop: '1px solid var(--hairline)', position: 'sticky', bottom: 0, background: 'var(--surface)' }}>
+            <button
+              className="btn"
+              style={{ width: '100%', justifyContent: 'center', fontWeight: 600, padding: '10px 0' }}
+              onClick={() => onViewInventory(c.band)}
+            >
+              View full inventory {Ic.arrowR({ style: { width: 14, height: 14 } })}
+            </button>
+          </div>
+        </div>
+      </aside>
+    </>
   );
 }

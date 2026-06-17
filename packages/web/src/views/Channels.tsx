@@ -1,5 +1,5 @@
 import { useFetch, type Dict } from '../lib/api';
-import { num, money, titleCase } from '../lib/format';
+import { num } from '../lib/format';
 import { Loading, ErrorState } from '../components/ui';
 import { useOpenChannel } from '../App';
 
@@ -8,9 +8,25 @@ interface ChannelsData {
   monthly: Array<Dict & { id: string }>;
 }
 
-const CH_COLOR: Record<string, string> = {
-  amazon: '#b46a09', deposco: '#3f51b5', berkeley: '#2f7d52', china: '#c0392b', pod: '#8a2d5a',
+const CHANNEL_ORDER = ['amazon', 'deposco', 'pod', 'berkeley', 'china'];
+
+const CHANNEL_META: Record<string, { label: string; sub: string; live: boolean }> = {
+  amazon:   { label: 'Amazon',         sub: 'FBA + Seller Fulfilled',     live: false },
+  deposco:  { label: 'Deposco',        sub: '3PL warehouse (live source)', live: true  },
+  pod:      { label: 'PODs',           sub: 'Print-on-demand / pop-up',    live: false },
+  berkeley: { label: 'Berkeley retail',sub: 'Flagship store',              live: false },
+  china:    { label: 'China',          sub: 'Cross-border / Tmall',        live: false },
 };
+
+const HATCH_CSS = `
+  repeating-linear-gradient(
+    -45deg,
+    var(--hairline) 0px,
+    var(--hairline) 1px,
+    transparent 1px,
+    transparent 8px
+  )
+`;
 
 export function Channels() {
   const { data, loading, error } = useFetch<ChannelsData>('/api/channels');
@@ -19,77 +35,110 @@ export function Channels() {
   if (error) return <ErrorState error={error} />;
   if (!data) return null;
 
-  const channels = [...data.channels].sort((a, b) => Number(b.recent_units_sold ?? 0) - Number(a.recent_units_sold ?? 0));
-  const totalUnits = channels.reduce((a, c) => a + Number(c.recent_units_sold ?? 0), 0);
-  const totalOnHand = channels.reduce((a, c) => a + Number(c.finished_goods_on_hand ?? 0), 0);
+  const byId = Object.fromEntries(data.channels.map((c) => [c.id, c]));
+  const deposco = byId['deposco'];
+  const totalOnHand = Number(deposco?.finished_goods_on_hand ?? deposco?.recent_units_sold ?? 0);
+  const allSkuCount = Number(deposco?.inventory_sku_count ?? 0);
 
-  // monthly actuals for the "all" scope, by month
-  const months = data.monthly
-    .filter((m) => m.channel === 'all')
-    .sort((a, b) => String(a.month).localeCompare(String(b.month)));
-  const maxMonthUnits = Math.max(1, ...months.map((m) => Number(m.actual_units ?? 0)));
+  const channelUnits = (id: string) => {
+    const c = byId[id];
+    return Number(c?.finished_goods_on_hand ?? c?.recent_units_sold ?? 0);
+  };
 
   return (
-    <>
-      <div className="card card-pad" style={{ marginBottom: 18 }}>
-        <div className="row-between">
-          <div>
-            <div className="eyebrow">Unified total available inventory</div>
-            <div className="bignum" style={{ marginTop: 6, fontSize: 28 }}>{num(totalOnHand)} <span className="faint" style={{ fontSize: 14 }}>units</span></div>
+    <div className="fade-in">
+      {/* unified pool card */}
+      <div className="card" style={{ padding: '24px 28px', marginBottom: 18 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 24, marginBottom: 20 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: 8 }}>
+              Unified Total Available Inventory
+            </div>
+            <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: '-.5px', marginBottom: 12 }}>
+              {num(totalOnHand)} units — one pool today
+            </div>
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, maxWidth: 560 }}>
+              The file gives us a single combined 3PL position. When the five channel feeds connect,
+              this bar splits — so you'll instantly see Amazon running dry while Deposco sits on surplus.
+            </p>
           </div>
-          <div className="legend">
-            {channels.map((c) => <span key={c.id}><span className="sw" style={{ background: CH_COLOR[c.id] ?? 'var(--faint)' }} />{titleCase(c.id)}</span>)}
-          </div>
+          <button className="btn-ghost" style={{ whiteSpace: 'nowrap', marginTop: 4, flexShrink: 0, fontSize: 12, padding: '6px 14px', border: '1px solid var(--hairline)', borderRadius: 6, background: 'var(--surface)', color: 'var(--ink)', cursor: 'default' }}>
+            Awaiting channel feeds
+          </button>
         </div>
-        <div className="barpair" style={{ marginTop: 14 }}>
-          {channels.map((c) => {
-            const w = totalUnits ? (Number(c.recent_units_sold ?? 0) / totalUnits) * 100 : 0;
-            return w > 0 ? <div key={c.id} title={`${titleCase(c.id)}: ${num(c.recent_units_sold)} units`} style={{ width: `${w}%`, background: CH_COLOR[c.id] ?? 'var(--faint)' }}>{w > 7 ? titleCase(c.id) : ''}</div> : null;
+
+        {/* segmented bar */}
+        <div style={{ display: 'flex', height: 40, borderRadius: 6, overflow: 'hidden', border: '1px solid var(--hairline)' }}>
+          {CHANNEL_ORDER.map((id) => {
+            const meta = CHANNEL_META[id];
+            const isLive = meta?.live;
+            const segStyle: React.CSSProperties = isLive
+              ? { flex: 1, background: '#111', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 13, fontWeight: 600 }
+              : { flex: 1, background: HATCH_CSS, backgroundColor: 'var(--surface)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)', fontSize: 13, borderRight: '1px solid var(--hairline)' };
+            return (
+              <div key={id} style={segStyle}>
+                {meta?.label}
+              </div>
+            );
           })}
         </div>
-        <div className="faint" style={{ fontSize: 11, marginTop: 6 }}>Share of recent units sold by channel.</div>
       </div>
 
-      <div className="grid-3">
-        {channels.map((c) => (
-          <button className="card card-pad channel-card" key={c.id} onClick={() => openChannel(c.id)}>
-            <div className="row-between">
-              <h3 style={{ margin: 0, fontSize: 15 }}>{titleCase(c.id)}</h3>
-              <span className="sw" style={{ width: 12, height: 12, borderRadius: 4, background: CH_COLOR[c.id] ?? 'var(--faint)' }} />
-            </div>
-            <div className="metric-grid" style={{ marginTop: 12 }}>
-              <Metric k="On hand" v={num(c.finished_goods_on_hand)} />
-              <Metric k="Units (all-time)" v={num(c.recent_units_sold)} />
-              <Metric k="Revenue (all-time)" v={money(c.recent_revenue)} />
-              <Metric k="SKUs sales / inv." v={`${num(c.sales_sku_count)} / ${num(c.inventory_sku_count)}`} />
-            </div>
-            <div className="channel-cta">View SKUs →</div>
-          </button>
-        ))}
-      </div>
+      {/* channel cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
+        {CHANNEL_ORDER.map((id) => {
+          const meta = CHANNEL_META[id];
+          const ch = byId[id];
+          const isLive = meta?.live;
+          const onHand = Number(ch?.finished_goods_on_hand ?? ch?.recent_units_sold ?? 0);
+          return (
+            <button
+              key={id}
+              className="card"
+              onClick={() => openChannel(id)}
+              style={{ padding: '16px 18px', textAlign: 'left', cursor: 'pointer', background: 'var(--surface)', border: '1px solid var(--hairline)', borderRadius: 10 }}
+            >
+              {/* card header */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <div style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--hairline)', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/>
+                  </svg>
+                </div>
+                {isLive
+                  ? <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--good)', background: 'color-mix(in srgb, var(--good) 12%, transparent)', padding: '2px 7px', borderRadius: 99 }}>Live</span>
+                  : <span style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 500 }}>No feed</span>
+                }
+              </div>
 
-      {months.length > 0 && (
-        <div className="card section-gap">
-          <div className="card-head"><h3>Monthly sales (all channels)</h3><span className="hint">actual units</span></div>
-          <div className="card-pad">
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 160 }}>
-              {months.map((m) => {
-                const h = (Number(m.actual_units ?? 0) / maxMonthUnits) * 100;
-                return (
-                  <div key={m.id} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }} title={`${m.month}: ${num(m.actual_units)} units · ${money(m.actual_revenue)}`}>
-                    <div style={{ width: '100%', height: `${h}%`, background: 'var(--accent)', borderRadius: '4px 4px 0 0', minHeight: 2 }} />
-                    <div className="faint" style={{ fontSize: 9, transform: 'rotate(-45deg)', whiteSpace: 'nowrap' }}>{String(m.month).slice(2)}</div>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2 }}>{meta?.label}</div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 14 }}>{meta?.sub}</div>
+
+              {onHand > 0 ? (
+                <div>
+                  <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: '-.5px', lineHeight: 1.1 }}>{num(isLive ? (onHand || totalOnHand) : onHand)}</div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>
+                    {(() => {
+                      const skus = Number(ch?.inventory_sku_count ?? ch?.sales_sku_count ?? 0);
+                      const rev = Number(ch?.recent_revenue ?? 0);
+                      const parts: string[] = ['units'];
+                      if (skus) parts.push(`${num(skus)} SKUs`);
+                      if (rev && !isLive) parts.push(`$${num(Math.round(rev / 1000))}k rev`);
+                      return parts.join(' · ');
+                    })()}
                   </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-    </>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {['TAI by SKU', 'Low-stock alerts', 'Transfer suggestions'].map((label) => (
+                    <div key={label} style={{ height: 10, borderRadius: 4, background: 'var(--hairline)', maxWidth: label.length * 7 }} title={label} />
+                  ))}
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
-}
-
-function Metric({ k, v }: { k: string; v: React.ReactNode }) {
-  return <div className="m"><div className="k">{k}</div><div className="v">{v}</div></div>;
 }

@@ -22,7 +22,7 @@ export const useOpenSku = () => useContext(SkuCtx);
 const ChannelCtx = createContext<(channel: string) => void>(() => {});
 export const useOpenChannel = () => useContext(ChannelCtx);
 
-const NavCtx = createContext<(id: ViewId) => void>(() => {});
+const NavCtx = createContext<(id: ViewId, opts?: { band?: string }) => void>(() => {});
 export const useGoView = () => useContext(NavCtx);
 
 type ViewId =
@@ -112,11 +112,12 @@ export function App() {
   const [openSkuId, setOpenSkuId] = useState<string | null>(null);
   const [channelId, setChannelId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [inventoryBand, setInventoryBand] = useState('all');
   const { data: summary } = useFetch<Summary>('/api/summary');
   // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
   const entry = NAV.find((n) => n.id === view) ?? NAV[0]!;
 
-  const goView = (id: ViewId) => { setChannelId(null); setView(id); setSidebarOpen(false); window.scrollTo(0, 0); };
+  const goView = (id: ViewId, opts?: { band?: string }) => { setChannelId(null); setView(id); setSidebarOpen(false); window.scrollTo(0, 0); setInventoryBand(opts?.band ?? 'all'); };
 
   useEffect(() => {
     const handler = () => { if (window.innerWidth > 768) setSidebarOpen(false); };
@@ -219,7 +220,7 @@ export function App() {
                     {view === 'cash'         && <CashPlanner />}
                     {view === 'finance'      && <Finance />}
                     {view === 'intercompany' && <Intercompany />}
-                    {view === 'inventory'    && <Inventory />}
+                    {view === 'inventory'    && <Inventory initialBand={inventoryBand} />}
                     {view === 'channels'     && <Channels />}
                     {view === 'vendors'      && <ComponentVendors />}
                     {view === 'ingvendors'   && <IngredientVendors />}
